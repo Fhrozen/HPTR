@@ -28,6 +28,10 @@ python -u src/pack_h5_womd.py --dataset=training \
 # --data-dir=/cluster/scratch/zhejzhan/av2_motion
 # }
 
+# python -u src/pack_h5_womd.py --dataset=validation \
+# --out-dir=./h5_womd_data/datasets \
+# --data-dir=/export/corpus04/OpenMotion/scenario
+
 source /cluster/project/cvl/zhejzhan/apps/miniconda3/etc/profile.d/conda.sh
 conda activate hptr # for av2: conda activate hptr_av2
 

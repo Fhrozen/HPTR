@@ -22,11 +22,6 @@ model_overrides:
     _target_: utils.submission.SubWOMD
     activate: True
     method_name: HPTR
-    authors: [Zhejun Zhang, Alexander Liniger, Christos Sakaridis, Fisher Yu, Luc Van Gool]
-    affiliation: "CVL, ETH Zurich"
-    description: "Real-Time Motion Prediction via Heterogeneous Polyline Transformer with Relative Pose Encoding. NeurIPS 2023. https://github.com/zhejz/HPTR"
-    method_link: "https://github.com/zhejz/HPTR"
-    account_name: "YOUR_ACCOUNT_NAME"
   sub_av2:
     _target_: utils.submission.SubAV2
     activate: False

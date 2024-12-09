@@ -2,7 +2,7 @@ _target_: pl_modules.waymo_motion.WaymoMotion
 
 time_step_current: 10
 time_step_end: 90
-n_video_batch: 3
+n_video_batch: 1
 interactive_challenge: False
 inference_cache_map: False
 inference_repeat_n: 1

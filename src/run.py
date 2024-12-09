@@ -10,8 +10,11 @@ import os
 
 def download_checkpoint(loggers, wb_ckpt) -> None:
     if os.environ.get("LOCAL_RANK", 0) == 0:
-        artifact = loggers[0].experiment.use_artifact(wb_ckpt, type="model")
-        artifact_dir = artifact.download("ckpt")
+        try:
+            artifact = loggers[0].experiment.use_artifact(wb_ckpt, type="model")
+            artifact_dir = artifact.download("ckpt")
+        except:
+            pass
 
 
 @hydra.main(config_path="../configs/", config_name="run.yaml")
@@ -35,6 +38,7 @@ def main(config: DictConfig) -> None:
             config.model, data_size=datamodule.tensor_size_train, _recursive_=False
         )
     else:
+        
         download_checkpoint(loggers, config.resume.checkpoint)
         ckpt_path = "ckpt/model.ckpt"
         modelClass = hydra.utils.get_class(config.model._target_)

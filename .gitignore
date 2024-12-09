@@ -136,3 +136,7 @@ outputs/
 wandb/
 data/
 *.pyc
+
+activate_python.sh
+
+h5_womd_data/

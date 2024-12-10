@@ -3,6 +3,7 @@ import sys
 
 sys.path.append(".")
 
+from functools import partial
 from argparse import ArgumentParser
 from tqdm import tqdm
 import h5py
@@ -11,6 +12,8 @@ from pathlib import Path
 from waymo_open_dataset.protos import scenario_pb2
 import src.utils.pack_h5 as pack_utils
 import tensorflow as tf
+
+import multiprocessing as mp
 
 tf.config.set_visible_devices([], "GPU")
 
@@ -56,6 +59,7 @@ STEP_CURRENT = 10
 
 
 def collate_agent_features(tracks, sdc_track_index, track_index_predict, object_id_interest):
+    """Collate Agent Feats."""
     agent_id = []
     agent_type = []
     agent_states = []
@@ -94,6 +98,7 @@ def collate_agent_features(tracks, sdc_track_index, track_index_predict, object_
 
 
 def collate_tl_features(tl_features):
+    """Collate TL feats"""
     tl_lane_state = []
     tl_lane_id = []
     tl_stop_point = []
@@ -126,6 +131,7 @@ def collate_tl_features(tl_features):
 
 
 def collate_map_features(map_features):
+    """Collate map feats."""
     mf_id = []
     mf_xyz = []
     mf_type = []
@@ -194,13 +200,170 @@ def collate_map_features(map_features):
     return mf_id, mf_xyz, mf_type, mf_edge
 
 
+def prepare_episode(
+    data,
+    out_h5_path: Path,
+    type_ds: str,
+    dest_no_pred: bool,
+    pack_history: bool,
+    pack_all: bool,
+    rand_pos: float = -1,
+    rand_yaw: float = -1,
+):
+    """Prepare Episode."""
+    scenario = scenario_pb2.Scenario()
+    scenario.ParseFromString(data.numpy())
+
+    mf_id, mf_xyz, mf_type, mf_edge = collate_map_features(scenario.map_features)
+    tl_lane_state, tl_lane_id, tl_stop_point = collate_tl_features(scenario.dynamic_map_states)
+    agent_id, agent_type, agent_states, agent_role = collate_agent_features(
+        scenario.tracks,
+        sdc_track_index=scenario.sdc_track_index,
+        track_index_predict=[i.track_index for i in scenario.tracks_to_predict],
+        object_id_interest=[i for i in scenario.objects_of_interest],
+    )
+
+    episode = {}
+    n_pl = pack_utils.pack_episode_map(
+        episode=episode, mf_id=mf_id, mf_xyz=mf_xyz, mf_type=mf_type, mf_edge=mf_edge, n_pl_max=N_PL_MAX
+    )
+    n_tl = pack_utils.pack_episode_traffic_lights(
+        episode=episode,
+        tl_lane_state=tl_lane_state,
+        tl_lane_id=tl_lane_id,
+        tl_stop_point=tl_stop_point,
+        pack_all=pack_all,
+        pack_history=pack_history,
+        n_tl_max=N_TL_MAX,
+        step_current=STEP_CURRENT,
+    )
+    n_agent = pack_utils.pack_episode_agents(
+        episode=episode,
+        agent_id=agent_id,
+        agent_type=agent_type,
+        agent_states=agent_states,
+        agent_role=agent_role,
+        pack_all=pack_all,
+        pack_history=pack_history,
+        n_agent_max=N_AGENT_MAX,
+        step_current=STEP_CURRENT,
+    )
+    scenario_center, scenario_yaw = pack_utils.center_at_sdc(episode, rand_pos, rand_yaw)
+
+    episode_reduced = {}
+    pack_utils.filter_episode_map(episode, N_PL, THRESH_MAP, thresh_z=3)
+    episode_with_map = episode["map/valid"].any(1).sum() > 0
+    pack_utils.repack_episode_map(episode, episode_reduced, N_PL, N_PL_TYPE)
+
+    pack_utils.filter_episode_traffic_lights(episode)
+    pack_utils.repack_episode_traffic_lights(episode, episode_reduced, N_TL, N_TL_STATE)
+
+    if "training" in type_ds :
+        mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
+            episode=episode,
+            episode_reduced=episode_reduced,
+            n_agent=N_AGENT,
+            prefix="",
+            dim_veh_lanes=DIM_VEH_LANES,
+            dist_thresh_agent=THRESH_AGENT,
+            step_current=STEP_CURRENT,
+        )
+        pack_utils.repack_episode_agents(
+            episode=episode,
+            episode_reduced=episode_reduced,
+            mask_sim=mask_sim,
+            n_agent=N_AGENT,
+            prefix="",
+            dim_veh_lanes=DIM_VEH_LANES,
+            dim_cyc_lanes=DIM_CYC_LANES,
+            dim_ped_lanes=DIM_PED_LANES,
+            dest_no_pred=dest_no_pred,
+        )
+    elif "validation" in type_ds:
+        mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
+            episode=episode,
+            episode_reduced=episode_reduced,
+            n_agent=N_AGENT,
+            prefix="history/",
+            dim_veh_lanes=DIM_VEH_LANES,
+            dist_thresh_agent=THRESH_AGENT,
+            step_current=STEP_CURRENT,
+        )
+        pack_utils.repack_episode_agents(
+            episode=episode,
+            episode_reduced=episode_reduced,
+            mask_sim=mask_sim,
+            n_agent=N_AGENT,
+            prefix="",
+            dim_veh_lanes=DIM_VEH_LANES,
+            dim_cyc_lanes=DIM_CYC_LANES,
+            dim_ped_lanes=DIM_PED_LANES,
+            dest_no_pred=dest_no_pred,
+        )
+        pack_utils.repack_episode_agents(episode, episode_reduced, mask_sim, N_AGENT, "history/")
+        pack_utils.repack_episode_agents_no_sim(episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "")
+        pack_utils.repack_episode_agents_no_sim(
+            episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "history/"
+        )
+    else:
+        if episode_with_map:
+            mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
+                episode=episode,
+                episode_reduced=episode_reduced,
+                n_agent=N_AGENT,
+                prefix="history/",
+                dim_veh_lanes=DIM_VEH_LANES,
+                dist_thresh_agent=THRESH_AGENT,
+                step_current=STEP_CURRENT,
+            )
+        else:
+            mask_valid = episode["history/agent/valid"].any(0)
+            mask_sim = episode["history/agent/role"].any(-1)
+            for _valid_idx in np.where(mask_valid)[0]:
+                mask_sim[_valid_idx] = True
+                if mask_sim.sum() >= N_AGENT:
+                    break
+            mask_no_sim = mask_valid & (~mask_sim)
+
+        pack_utils.repack_episode_agents(episode, episode_reduced, mask_sim, N_AGENT, "history/")
+        pack_utils.repack_episode_agents_no_sim(
+            episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "history/"
+        )
+    n_agent_sim = mask_sim.sum()
+    n_agent_no_sim = mask_no_sim.sum()
+
+    if episode_with_map:
+        episode_reduced["map/boundary"] = pack_utils.get_map_boundary(
+            episode_reduced["map/valid"], episode_reduced["map/pos"]
+        )
+    else:
+        # only in waymo test split.
+        assert type_ds == "testing"
+        episode_reduced["map/boundary"] = pack_utils.get_map_boundary(
+            episode["history/agent/valid"], episode["history/agent/pos"]
+        )
+        print(f"scenario {scenario.scenario_id} has no map! map boundary is: {episode_reduced['map/boundary']}")
+
+    out_h5_file = out_h5_path / (scenario.scenario_id + ".h5")
+    with h5py.File(out_h5_file, "w") as hf:
+        hf_episode = hf.create_group(str(0))
+        hf_episode.attrs["scenario_center"] = scenario_center
+        hf_episode.attrs["scenario_yaw"] = scenario_yaw
+        hf_episode.attrs["with_map"] = episode_with_map
+
+        for k, v in episode_reduced.items():
+            hf_episode.create_dataset(k, data=v, compression="gzip", compression_opts=4, shuffle=True)
+    return True, n_agent, n_pl, n_tl, n_agent_sim, n_agent_no_sim
+
+
 def main():
     parser = ArgumentParser(allow_abbrev=True)
     parser.add_argument("--data-dir", default="/cluster/scratch/zhejzhan/womd_scenario_v_1_2_0")
-    parser.add_argument("--dataset", default="training")
+    parser.add_argument("--dataset", default="training", type=str)
     parser.add_argument("--out-dir", default="/cluster/scratch/zhejzhan/h5_womd_hptr")
-    parser.add_argument("--rand-pos", default=50.0, type=float, help="Meter. Set to -1 to disable.")
-    parser.add_argument("--rand-yaw", default=3.14, type=float, help="Radian. Set to -1 to disable.")
+    parser.add_argument("--rand-pos", default=-1, type=float, help="Meter. Set to -1 to disable.")
+    parser.add_argument("--rand-yaw", default=-1, type=float, help="Radian. Set to -1 to disable.")
+    parser.add_argument("--num-workers", default=6, type=int, help="Number of workers.")
     parser.add_argument("--dest-no-pred", action="store_true")
     args = parser.parse_args()
 
@@ -219,171 +382,40 @@ def main():
     elif "validation" in args.dataset:
         pack_all = True
         pack_history = True
-    elif "testing" in args.dataset:
+    else:
         pack_all = False
         pack_history = True
 
     out_path = Path(args.out_dir)
-    out_path.mkdir(exist_ok=True)
-    out_h5_path = out_path / (args.dataset + ".h5")
+    out_h5_path: Path = out_path / (args.dataset + "_files")
+    out_h5_path.mkdir(exist_ok=True, parents=True)
 
     data_path = Path(args.data_dir) / args.dataset
     dataset = tf.data.TFRecordDataset(sorted([p.as_posix() for p in data_path.glob("*")]), compression_type="")
-    n_pl_max, n_tl_max, n_agent_max, n_agent_sim, n_agent_no_sim, data_len = 0, 0, 0, 0, 0, 0
-    with h5py.File(out_h5_path, "w") as hf:
-        for i, data in tqdm(enumerate(dataset), total=dataset_size[args.dataset]):
 
-            scenario = scenario_pb2.Scenario()
-            scenario.ParseFromString(data.numpy())
+    episode_fun = partial(
+        prepare_episode,
+        out_h5_path=out_h5_path,
+        type_ds=args.dataset,
+        dest_no_pred=args.dest_no_pred,
+        pack_history=pack_history,
+        pack_all=pack_all,
+        rand_pos=args.rand_pos,
+        rand_yaw=args.rand_yaw
+    )
 
-            mf_id, mf_xyz, mf_type, mf_edge = collate_map_features(scenario.map_features)
-            tl_lane_state, tl_lane_id, tl_stop_point = collate_tl_features(scenario.dynamic_map_states)
-            agent_id, agent_type, agent_states, agent_role = collate_agent_features(
-                scenario.tracks,
-                sdc_track_index=scenario.sdc_track_index,
-                track_index_predict=[i.track_index for i in scenario.tracks_to_predict],
-                object_id_interest=[i for i in scenario.objects_of_interest],
-            )
+    # for i, data in tqdm(enumerate(dataset), total=dataset_size[args.dataset]):
+    #     outs = episode_fun(data)
+    #     data_len += 1
 
-            episode = {}
-            n_pl = pack_utils.pack_episode_map(
-                episode=episode, mf_id=mf_id, mf_xyz=mf_xyz, mf_type=mf_type, mf_edge=mf_edge, n_pl_max=N_PL_MAX
-            )
-            n_tl = pack_utils.pack_episode_traffic_lights(
-                episode=episode,
-                tl_lane_state=tl_lane_state,
-                tl_lane_id=tl_lane_id,
-                tl_stop_point=tl_stop_point,
-                pack_all=pack_all,
-                pack_history=pack_history,
-                n_tl_max=N_TL_MAX,
-                step_current=STEP_CURRENT,
-            )
-            n_agent = pack_utils.pack_episode_agents(
-                episode=episode,
-                agent_id=agent_id,
-                agent_type=agent_type,
-                agent_states=agent_states,
-                agent_role=agent_role,
-                pack_all=pack_all,
-                pack_history=pack_history,
-                n_agent_max=N_AGENT_MAX,
-                step_current=STEP_CURRENT,
-            )
-            scenario_center, scenario_yaw = pack_utils.center_at_sdc(episode, args.rand_pos, args.rand_yaw)
-            n_pl_max = max(n_pl_max, n_pl)
-            n_tl_max = max(n_tl_max, n_tl)
-            n_agent_max = max(n_agent_max, n_agent)
+    with mp.Pool(args.num_workers) as pool:
+        _outs = list(tqdm(pool.imap(episode_fun, dataset), total=dataset_size[args.dataset]))
+    _outs = [[x[i] for x in _outs] for i in range(6)]
 
-            episode_reduced = {}
-            pack_utils.filter_episode_map(episode, N_PL, THRESH_MAP, thresh_z=3)
-            episode_with_map = episode["map/valid"].any(1).sum() > 0
-            pack_utils.repack_episode_map(episode, episode_reduced, N_PL, N_PL_TYPE)
-
-            pack_utils.filter_episode_traffic_lights(episode)
-            pack_utils.repack_episode_traffic_lights(episode, episode_reduced, N_TL, N_TL_STATE)
-
-            if "training" in args.dataset:
-                mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
-                    episode=episode,
-                    episode_reduced=episode_reduced,
-                    n_agent=N_AGENT,
-                    prefix="",
-                    dim_veh_lanes=DIM_VEH_LANES,
-                    dist_thresh_agent=THRESH_AGENT,
-                    step_current=STEP_CURRENT,
-                )
-                pack_utils.repack_episode_agents(
-                    episode=episode,
-                    episode_reduced=episode_reduced,
-                    mask_sim=mask_sim,
-                    n_agent=N_AGENT,
-                    prefix="",
-                    dim_veh_lanes=DIM_VEH_LANES,
-                    dim_cyc_lanes=DIM_CYC_LANES,
-                    dim_ped_lanes=DIM_PED_LANES,
-                    dest_no_pred=args.dest_no_pred,
-                )
-            elif "validation" in args.dataset:
-                mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
-                    episode=episode,
-                    episode_reduced=episode_reduced,
-                    n_agent=N_AGENT,
-                    prefix="history/",
-                    dim_veh_lanes=DIM_VEH_LANES,
-                    dist_thresh_agent=THRESH_AGENT,
-                    step_current=STEP_CURRENT,
-                )
-                pack_utils.repack_episode_agents(
-                    episode=episode,
-                    episode_reduced=episode_reduced,
-                    mask_sim=mask_sim,
-                    n_agent=N_AGENT,
-                    prefix="",
-                    dim_veh_lanes=DIM_VEH_LANES,
-                    dim_cyc_lanes=DIM_CYC_LANES,
-                    dim_ped_lanes=DIM_PED_LANES,
-                    dest_no_pred=args.dest_no_pred,
-                )
-                pack_utils.repack_episode_agents(episode, episode_reduced, mask_sim, N_AGENT, "history/")
-                pack_utils.repack_episode_agents_no_sim(episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "")
-                pack_utils.repack_episode_agents_no_sim(
-                    episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "history/"
-                )
-            elif "testing" in args.dataset:
-                if episode_with_map:
-                    mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
-                        episode=episode,
-                        episode_reduced=episode_reduced,
-                        n_agent=N_AGENT,
-                        prefix="history/",
-                        dim_veh_lanes=DIM_VEH_LANES,
-                        dist_thresh_agent=THRESH_AGENT,
-                        step_current=STEP_CURRENT,
-                    )
-                else:
-                    mask_valid = episode["history/agent/valid"].any(0)
-                    mask_sim = episode["history/agent/role"].any(-1)
-                    for _valid_idx in np.where(mask_valid)[0]:
-                        mask_sim[_valid_idx] = True
-                        if mask_sim.sum() >= N_AGENT:
-                            break
-                    mask_no_sim = mask_valid & (~mask_sim)
-
-                pack_utils.repack_episode_agents(episode, episode_reduced, mask_sim, N_AGENT, "history/")
-                pack_utils.repack_episode_agents_no_sim(
-                    episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "history/"
-                )
-            n_agent_sim = max(n_agent_sim, mask_sim.sum())
-            n_agent_no_sim = max(n_agent_no_sim, mask_no_sim.sum())
-
-            if episode_with_map:
-                episode_reduced["map/boundary"] = pack_utils.get_map_boundary(
-                    episode_reduced["map/valid"], episode_reduced["map/pos"]
-                )
-            else:
-                # only in waymo test split.
-                assert args.dataset == "testing"
-                episode_reduced["map/boundary"] = pack_utils.get_map_boundary(
-                    episode["history/agent/valid"], episode["history/agent/pos"]
-                )
-                print(f"scenario {i} has no map! map boundary is: {episode_reduced['map/boundary']}")
-
-            hf_episode = hf.create_group(str(i))
-            hf_episode.attrs["scenario_id"] = scenario.scenario_id
-            hf_episode.attrs["scenario_center"] = scenario_center
-            hf_episode.attrs["scenario_yaw"] = scenario_yaw
-            hf_episode.attrs["with_map"] = episode_with_map
-
-            for k, v in episode_reduced.items():
-                hf_episode.create_dataset(k, data=v, compression="gzip", compression_opts=4, shuffle=True)
-
-            data_len += 1
-
-        print(f"data_len: {data_len}, dataset_size: {dataset_size[args.dataset]}")
-        print(f"n_pl_max: {n_pl_max}")
-        print(f"n_agent_max: {n_agent_max}, n_agent_sim: {n_agent_sim}, n_agent_no_sim: {n_agent_no_sim}")
-        hf.attrs["data_len"] = data_len
+    data_len = np.sum(_outs[0])
+    print(f"data_len: {data_len}, dataset_size: {dataset_size[args.dataset]}")
+    print(f"n_pl_max: {max(_outs[2])}")
+    print(f"n_agent_max: {max(_outs[1])}, n_agent_sim: {max(_outs[4])}, n_agent_no_sim: {max(_outs[5])}")
 
 
 if __name__ == "__main__":

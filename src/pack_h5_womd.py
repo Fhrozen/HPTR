@@ -404,12 +404,12 @@ def main():
         rand_yaw=args.rand_yaw
     )
 
-    # for i, data in tqdm(enumerate(dataset), total=dataset_size[args.dataset]):
-    #     outs = episode_fun(data)
-    #     data_len += 1
+    _outs = []
+    for i, data in tqdm(enumerate(dataset), total=dataset_size[args.dataset]):
+        _outs.append(episode_fun(data))
 
-    with mp.Pool(args.num_workers) as pool:
-        _outs = list(tqdm(pool.imap(episode_fun, dataset), total=dataset_size[args.dataset]))
+    # with mp.Pool(args.num_workers) as pool:
+    #     _outs = list(tqdm(pool.imap(episode_fun, dataset), total=dataset_size[args.dataset]))
     _outs = [[x[i] for x in _outs] for i in range(6)]
 
     data_len = np.sum(_outs[0])

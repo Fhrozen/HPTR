@@ -137,5 +137,7 @@ wandb/
 data/
 *.pyc
 h5_womd_hptr/*
+h5_womd_data/*
+activate_python.sh
 cmds.txt
 qsub/*

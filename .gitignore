@@ -136,3 +136,6 @@ outputs/
 wandb/
 data/
 *.pyc
+h5_womd_hptr/*
+cmds.txt
+qsub/*

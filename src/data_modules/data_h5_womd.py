@@ -5,12 +5,15 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import h5py
 
+from tqdm import tqdm
+
 
 class DatasetBase(Dataset[Dict[str, np.ndarray]]):
     def __init__(self, filepath: str, tensor_size: Dict[str, Tuple]) -> None:
         super().__init__()
         self.tensor_size = tensor_size
         self.filepath = filepath
+        self._samples = dict()
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as hf:
             self.dataset_len = int(hf.attrs["data_len"])
 
@@ -28,17 +31,53 @@ class DatasetTrain(DatasetBase):
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
         idx = np.random.randint(self.dataset_len)
         idx_key = str(idx)
+        _sample = self._samples.get(idx_key, None)
+        if _sample is not None:
+            return _sample
+
         out_dict = {"episode_idx": idx}
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as hf:
             for k in self.tensor_size.keys():
                 out_dict[k] = np.ascontiguousarray(hf[idx_key][k])
+        self._samples[idx_key] = out_dict
         return out_dict
+
+
+class DatasetTrainNew(Dataset[Dict[str, np.ndarray]]):
+    def __init__(self, filepath: str, tensor_size: Dict[str, Tuple]) -> None:
+        super().__init__()
+        self.tensor_size = tensor_size
+        self.filepath = filepath
+        self._samples = dict()
+        with h5py.File(self.filepath, "r", libver="latest", swmr=True) as hf:
+            self.dataset_len = int(hf.attrs["data_len"])
+            for idx in tqdm(range(self.dataset_len), desc="Loading train samples:"):
+                self._samples = {"episode_idx": idx}
+                idx_key = str(idx)
+                for k in self.tensor_size.keys():
+                    self._samples[k] = np.ascontiguousarray(hf[idx_key][k])
+
+    def __len__(self) -> int:
+        return self.dataset_len
+
+    def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
+        idx = np.random.randint(self.dataset_len)
+        # idx_key = str(idx)
+        # out_dict = {"episode_idx": idx}
+        # with h5py.File(self.filepath, "r", libver="latest", swmr=True) as hf:
+        #     for k in self.tensor_size.keys():
+        #         out_dict[k] = np.ascontiguousarray(hf[idx_key][k])
+        return self._samples[idx]
 
 
 class DatasetVal(DatasetBase):
     # for validation.h5 and testing.h5
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
         idx_key = str(idx)
+        _sample = self._samples.get(idx_key, None)
+        if _sample is not None:
+            return _sample
+        
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as hf:
             out_dict = {
                 "episode_idx": idx,
@@ -52,6 +91,7 @@ class DatasetVal(DatasetBase):
                 if out_dict[k].shape != _size:
                     assert "agent" in k
                     out_dict[k] = np.ones(_size, dtype=out_dict[k].dtype)
+        self._samples[idx_key] = out_dict
         return out_dict
 
 
@@ -196,5 +236,5 @@ class DataH5womd(LightningDataModule):
             pin_memory=True,
             shuffle=False,
             drop_last=False,
-            persistent_workers=True,
+            persistent_workers=(num_workers > 0),
         )

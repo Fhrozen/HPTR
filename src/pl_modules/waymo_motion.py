@@ -84,19 +84,19 @@ class WaymoMotion(LightningModule):
             if ("error_" in k) or ("loss" in k) or ("counter_traj" in k) or ("counter_conf" in k):
                 self.log(k, metrics_dict[k], on_step=True)
 
-        if self.global_rank == 0:
-            n_d = self.train_metric.n_decoders
-            n_p = self.train_metric.n_pred
-            for k in ["conf", "counter"]:
-                for i in range(n_d):
-                    w = []
-                    for j in range(n_p):
-                        k_str = f"{self.train_metric.prefix}/{k}_d{i}_p{j}"
-                        w.append(metrics_dict[k_str].item())
-                    h = np.histogram(range(n_p), weights=w, density=True, bins=n_p, range=(0, n_p - 1))
-                    self.logger[0].experiment.log(
-                        {f"{self.train_metric.prefix}/{k}_d{i}": wandb.Histogram(np_histogram=h)}
-                    )
+        # if self.global_rank == 0:
+        #     n_d = self.train_metric.n_decoders
+        #     n_p = self.train_metric.n_pred
+        #     for k in ["conf", "counter"]:
+        #         for i in range(n_d):
+        #             w = []
+        #             for j in range(n_p):
+        #                 k_str = f"{self.train_metric.prefix}/{k}_d{i}_p{j}"
+        #                 w.append(metrics_dict[k_str].item())
+        #             h = np.histogram(range(n_p), weights=w, density=True, bins=n_p, range=(0, n_p - 1))
+        #             self.logger[0].experiment.log(
+        #                 {f"{self.train_metric.prefix}/{k}_d{i}": wandb.Histogram(np_histogram=h)}
+        #             )
 
         return metrics_dict[f"{self.train_metric.prefix}/loss"]
 
@@ -134,7 +134,7 @@ class WaymoMotion(LightningModule):
             vis_eps_idx = list(range(min(pred_dict["waymo_valid"].shape[0], 3)))
             # log all preds only for the first batch
             k_to_log = min(pred_dict["waymo_trajs"].shape[-2], 6) if batch_idx == 0 else 1
-            videos, images = self.save_visualizations(
+            _ = self.save_visualizations(
                 prefix="scene",
                 step_current=self.hparams.time_step_current,
                 step_gt=self.hparams.time_step_end,
@@ -149,10 +149,10 @@ class WaymoMotion(LightningModule):
                 vis_eps_idx=vis_eps_idx,
                 save_im=True,
             )
-            for p, im in images.items():
-                self.logger[0].experiment.log({p: wandb.Image(p)}, commit=False)
-            for p in videos.keys():
-                self.logger[0].experiment.log({p: wandb.Video(p)}, commit=False)
+            # for p, im in images.items():
+            #     self.logger[0].experiment.log({p: wandb.Image(p)}, commit=False)
+            # for p in videos.keys():
+            #     self.logger[0].experiment.log({p: wandb.Video(p)}, commit=False)
 
     def validation_epoch_end(self, outputs):
         epoch_waymo_metrics = self.waymo_metric.compute_waymo_motion_metrics()
@@ -163,7 +163,7 @@ class WaymoMotion(LightningModule):
 
         if self.global_rank == 0:
             self.sub_womd.save_sub_files(self.logger[0])
-            self.sub_av2.save_sub_files(self.logger[0])
+        #     self.sub_av2.save_sub_files(self.logger[0])
 
     @staticmethod
     def save_visualizations(

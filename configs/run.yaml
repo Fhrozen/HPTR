@@ -5,8 +5,8 @@ defaults:
   - trainer: womd
   - model: scr_womd
   - datamodule: h5_womd
-  - callbacks: wandb
-  - loggers: wandb
+  - callbacks: mlflow
+  - loggers: mlflow
   - resume: empty
 
 hydra:

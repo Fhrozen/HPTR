@@ -191,7 +191,9 @@ class SceneCentricRelative(nn.Module):
                 ],
                 dim=-1,
             )
-
+        # print(batch["input/agent_attr"][0, 0,:, 10])
+        # print(agent_vel_local[0, 0])
+        # exit()
         # ! prepare "input/map"
         # [n_scene, n_pl]
         pl_yaw = torch.atan2(batch["sc/map_dir"][:, :, 0, 1], batch["sc/map_dir"][:, :, 0, 0])

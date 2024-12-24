@@ -1,5 +1,7 @@
 # Licensed under the CC BY-NC 4.0 license (https://creativecommons.org/licenses/by-nc/4.0/)
 from typing import Optional, Dict, Any, Tuple
+
+from glob import glob
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
@@ -24,6 +26,33 @@ class DatasetTrain(DatasetBase):
     Always train with the whole training.h5 dataset.
     limit_train_batches just for controlling the validation frequency.
     """
+
+    def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
+        idx = np.random.randint(self.dataset_len)
+        idx_key = str(idx)
+        out_dict = {"episode_idx": idx}
+        with h5py.File(self.filepath, "r", libver="latest", swmr=True) as hf:
+            for k in self.tensor_size.keys():
+                out_dict[k] = np.ascontiguousarray(hf[idx_key][k])
+        return out_dict
+
+
+class DatasetTrainNew(Dataset[Dict[str, np.ndarray]]):
+    """
+    The waymo 9-sec trainging.h5 is repetitive, start at {0, 2, 4, 5, 6, 8, 10} seconds within the 20-sec episode.
+    Always train with the whole training.h5 dataset.
+    limit_train_batches just for controlling the validation frequency.
+    """
+    def __init__(self, filepath: str, tensor_size: Dict[str, Tuple]) -> None:
+        super().__init__()
+        self.tensor_size = tensor_size
+        self.filepath = filepath.replace(".h5", "_files")
+        
+        with h5py.File(self.filepath, "r", libver="latest", swmr=True) as hf:
+            self.dataset_len = int(hf.attrs["data_len"])
+
+    def __len__(self) -> int:
+        return self.dataset_len
 
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
         idx = np.random.randint(self.dataset_len)
@@ -171,7 +200,7 @@ class DataH5womd(LightningDataModule):
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage == "fit" or stage is None:
-            self.train_dataset = DatasetTrain(self.path_train_h5, self.tensor_size_train)
+            self.train_dataset = DatasetTrainNew(self.path_train_h5, self.tensor_size_train)
             self.val_dataset = DatasetVal(self.path_val_h5, self.tensor_size_val)
         elif stage == "validate":
             self.val_dataset = DatasetVal(self.path_val_h5, self.tensor_size_val)

@@ -5,8 +5,8 @@ defaults:
   - trainer: womd
   - model: scr_womd
   - datamodule: h5_womd
-  - callbacks: wandb
-  - loggers: wandb
+  # - callbacks: wandb
+  # - loggers: wandb
   - resume: empty
 
 hydra:
@@ -14,5 +14,5 @@ hydra:
     dir: logs/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 work_dir: ${hydra:runtime.cwd}
-seed: 2023
+seed: 0
 action: fit # fit, validate, test

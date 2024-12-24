@@ -7,6 +7,7 @@ import glob
 import h5py
 
 import numpy as np
+import torch
 from torch import nn
 
 from data_modules.scene_centric import SceneCentricPreProcessing
@@ -59,25 +60,55 @@ def main():
     # Prepare data sample
     listfiles = sorted(glob.glob(os.path.join("./h5_womd_data/datasets/training_files", "*.h5")))
     for idx, fn in enumerate(listfiles):
-        if "4b60f9400a30ceaf" in fn:
+        if "486eea22901338df" in fn:
             break
     print(listfiles[idx])
 
-    # pre_processing = [
-        
-    # ]
-    # pre_processing = nn.Sequential(*pre_processing)
+    pre_processing = [
+        SceneCentricPreProcessing(
+            gt_in_local=True,
+            mask_invalid=False,
+            time_step_current=10,
+            data_size=tensor_size_train
+        ),
+        SceneCentricRelative(
+            time_step_current=10,
+            data_size=tensor_size_train,
+            dropout_p_history=-1,
+            use_current_tl=True,
+            add_ohe=True,
+            pl_aggr=False,
+            pose_pe={"agent": "mpa_pl", "map": "mpa_pl"}
+        )
+    ]
+    pre_processing = nn.Sequential(*pre_processing)
+    pre_processing.train()
     
     data = {}
     with h5py.File(listfiles[idx], "r", libver="latest", swmr=True) as hf:
         for key in tensor_size_train:
-            data[key] = np.ascontiguousarray(hf["0"][key])
-        # print(hf["0"].attrs["scenario_center"])
-        # print(hf["0"].attrs["scenario_yaw"])
+            _val = np.ascontiguousarray(hf["0"][key])
+            # if key.startswith("agent") and _val.shape[0] == 91:
+            #     _val = np.swapaxes(_val, 0, 1)
+            data[key] = _val
+        print(hf["0"].attrs["scenario_center"])
+        print(hf["0"].attrs["scenario_yaw"])
 
+    data_t = {k: torch.from_numpy(v).unsqueeze(0) for k, v in data.items()}
+    # print(data["agent/pos"][0, :, 0])
+    # print(pre_processing)
+    _batch = pre_processing(data_t)
     # print(list(data))
     # print(data["agent/role"])
-    print(data["agent/pos"][:, 0].T)
+    # print(list(_batch))
+    batch = {}
+    for k in _batch:
+        if "input" in k:
+            batch[k] = _batch[k].squeeze(0).numpy()
+    vel = batch["input/agent_attr"][..., 7:9]
+    print("here 104")
+    # print(batch["input/agent_attr"][0, :, :2])
+    print(batch["input/agent_attr"][0, :, 2:4])
     return
 
 

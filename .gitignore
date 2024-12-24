@@ -129,6 +129,7 @@ dmypy.json
 .pyre/
 
 # my ignore
+downloads
 .vscode/settings.json
 logs/
 runs/
